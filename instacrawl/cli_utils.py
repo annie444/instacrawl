@@ -10,8 +10,8 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.live import Live
 from rich.table import Table
-from console import console
-from steps import InstaStepFour
+from instacrawl.console import console
+from instacrawl.steps import InstaStepFour
 
 
 def view_data(data: InstaStepFour):
@@ -46,7 +46,7 @@ def view_data(data: InstaStepFour):
                 return
 
 
-def align_df(df: pd.DataFrame) -> int:
+def align_df(df: pd.DataFrame) -> None:
     """Align the dataframe to the console."""
     i, pixels = print_row(df, 0)
     layout = Layout()
@@ -55,8 +55,8 @@ def align_df(df: pd.DataFrame) -> int:
         Layout(name="post", ratio=1)
     )
     ins = "Use the up and down arrows or W and S \
-        to align the image with the post. \
-        Press SPACE to select the current post."
+to align the image with the post. \
+Press SPACE to select the current post."
     layout["post"].split_column(
         Layout(
             Panel(
@@ -147,12 +147,16 @@ def align_df(df: pd.DataFrame) -> int:
                     update_layout(layout, df, i)
                 elif (event.key is keyboard.Key.enter
                         or event.key is keyboard.Key.space):
-                    return i
-        return i
+                    return
+        return
 
 
 def update_layout(layout: Layout, df: pd.DataFrame, i: int):
     """Update the layout with the new post."""
+    i, pixels = print_row(df, i)
+    layout["image"].update(
+        pixels
+    )
     layout["post"]["caption"].update(
         Panel(
             Text(
@@ -206,15 +210,30 @@ def update_layout(layout: Layout, df: pd.DataFrame, i: int):
     )
 
 
-def to_string(img: Image.Image, dest_height: int, unicode: bool = True) -> str:
+def to_string(
+    img: Image.Image,
+    dest_height: int,
+    dest_width: int,
+    unicode: bool = True
+) -> str:
     """Convert an image to a string."""
     dest_height = dest_height * 2
+    dest_width = dest_width * 2
     img_width, img_height = img.size
-    scale = img_height / dest_height
-    if scale >= 1:
-        scale = 1
-    dest_width = int(img_width / scale)
-    dest_width = dest_width + 1 if dest_width % 2 != 0 else dest_width
+    scale_height = img_height / dest_height
+    scale_width = img_width / dest_width
+    if scale_height > scale_width:
+        scale = scale_height
+        if scale <= 1:
+            scale = 1
+        dest_width = int(img_width / scale)
+        dest_width = dest_width + 1 if dest_width % 2 != 0 else dest_width
+    else:
+        scale = scale_width
+        if scale <= 1:
+            scale = 1
+        dest_height = int(img_height / scale)
+        dest_height = dest_height + 1 if dest_height % 2 != 0 else dest_height
     img = img.resize((dest_width, dest_height))
     img = img.convert("RGB")
     output = ""
@@ -269,34 +288,47 @@ def print_row(
 ) -> tuple[int, str]:
     """Print the row to the console."""
     row = df.loc[index]
-    if isinstance(row["path"], str):
-        paths = row["path"].strip("][").replace("'", "").split(', ')
-    elif isinstance(row["path"], list):
-        paths = row["path"]
+    if isinstance(row["paths"], str):
+        paths = row["paths"].strip("][").replace("'", "").split(', ')
+    elif isinstance(row["paths"], list):
+        paths = row["paths"]
+        print(paths)
     else:
         raise ValueError("Path is not a string or list.")
-    if row["type"] == "image":
+    print(row["type_"])
+    if row["type_"] == "image":
+        print("opening image.")
         with Image.open(str(paths[0])) as image:
-            pixels = to_string(image, console.size.height - 2, True)
+            pixels = to_string(
+                image,
+                console.size.height - 2,
+                int(console.size.width * (2/3) - 2),
+                True
+            )
             return index, pixels
-    elif row["type"] == "video":
+    elif row["type_"] == "video":
         cap = cv2.VideoCapture(str(paths[0]))
         if not cap.isOpened():
             console.print(
                 f"""[red]Error opening video stream or file[/red]:
-                [bold]{row["path"][0]}[/bold]"""
+                [bold]{row["paths"][0]}[/bold]"""
             )
         success, image = cap.read()
         if success:
             color_coverted = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(color_coverted)
-            pixels = to_string(pil_image, console.size.height - 2, True)
+            pixels = to_string(
+                pil_image,
+                console.size.height - 2,
+                int(console.size.width * (2/3) - 2),
+                True
+            )
             cap.release()
             return index, pixels
         else:
             console.print(
                 f"""[red]Error opening video stream or file[/red]:
-                [bold]{row["path"][0]}[/bold]"""
+                [bold]{row["paths"][0]}[/bold]"""
             )
             return print_row(df, index + 1)
     else:

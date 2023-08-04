@@ -1,8 +1,7 @@
 """Objects to analyze the crawled data."""
 
 from __future__ import annotations
-from typing import Dict, List, Tuple, Any, Protocol, TypeVar
-from typing_extensions import TypeAlias
+from typing import Dict, List, Tuple, Any
 from transformers import \
     AutoImageProcessor, \
     AutoModelForObjectDetection, \
@@ -21,26 +20,10 @@ from rich.progress import Progress, TaskID
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sklearn.cluster import DBSCAN
 import face_recognition
-from steps import InstaStepFour, PersonImage, FaceData
+from instacrawl.steps import InstaStepFour, PersonImage, FaceData
 import time as sleep
-from console import console
+from instacrawl.console import console
 import os
-
-_T_contra = TypeVar("_T_contra", contravariant=True)
-
-
-class SupportsDunderLT(Protocol[_T_contra]):
-    def __lt__(self, __other: _T_contra) -> bool:
-        ...
-
-
-class SupportsDunderGT(Protocol[_T_contra]):
-    def __gt__(self, __other: _T_contra) -> bool:
-        ...
-
-
-SupportsRichComparison: TypeAlias = \
-    SupportsDunderLT[Any] | SupportsDunderGT[Any]
 
 np.random.seed(0)
 transformers.logging.set_verbosity(transformers.logging.CRITICAL)
@@ -497,14 +480,6 @@ class ImageAnalysis(InstaAnalysis):
         clt = DBSCAN(eps=0.5, metric="euclidean")
         self.advance()
         clt.fit(encodings)
-        print("Labels")
-        print(clt.labels_.shape)
-        print("Components")
-        print(clt.components_.shape)
-        print("Core Samples")
-        print(clt.core_sample_indices_.shape)
-        print("Number of features")
-        print(clt.n_features_in_)
         self.advance()
         for face, label in zip(self.data.faces, clt.labels_):
             self.insert_result(face.post, "faces", f"{label}", 1)

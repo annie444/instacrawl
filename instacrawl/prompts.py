@@ -3,8 +3,8 @@
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt, IntPrompt
-from insta import InstagramData
-from typing import List
+from instacrawl.insta import InstagramData
+from typing import List, Dict, Optional
 import pandas as pd
 import dtale
 from os import PathLike
@@ -12,13 +12,28 @@ from pathlib import Path
 import os
 import time
 from datetime import datetime
-from cli_utils import align_df, save_df, read_df
-from analysis import Postalyzer
+from instacrawl.cli_utils import align_df, save_df, read_df
+from instacrawl.analysis import Postalyzer
+from dotenv import dotenv_values
+
+empty_entry = ["", "\n", "\r", " "]
 
 
 class InstaCrawl:
-    def __init__(self, console):
+    def __init__(self, console, **kwargs):
         self.console = console
+        self.config: Dict[str, Optional[str]]
+        if os.path.exists(os.path.expanduser("~/.instacrawlrc")):
+            self.config = {
+                **dotenv_values(os.path.expanduser("~/.instacrawlrc")),
+                **os.environ,
+                **kwargs,
+            }
+        else:
+            self.config = {
+                **os.environ,
+                **kwargs,
+            }
         self.welcome()
 
     def print(self, text: str, input: str):
@@ -106,25 +121,51 @@ Alternatively, you can paste the URL of the profile here.
         url = Prompt.ask("Profile", console=self.console)
         if not url.startswith("https://instagram.com/"):
             url = "https://instagram.com/" + url
-        self.print(
-            "Where would you like to save the data?",
-            """
+
+        if ("INSTACRAWL_SAVE_TO" in self.config.keys() and
+                self.config["INSTACRAWL_SAVE_TO"] not in empty_entry and
+                self.config["INSTACRAWL_SAVE_TO"] is not None):
+            save_to = Path(
+                os.path.expanduser(
+                    str(
+                        self.config["INSTACRAWL_SAVE_TO"]
+                    )
+                )
+            )
+        else:
+            self.print(
+                "Where would you like to save the data?",
+                """
 This should be a directory. If it does not exist, it will be created.
 
 This is where all of the generated data will be stored. This will allow you
 to analyze the data later without having to crawl the profile again.
 
 [italic](Default is ~/instacrawl)[/italic]
-            """
-        )
-        save_to = Prompt.ask("Path to save data", console=self.console)
-        if save_to == "\n" or save_to == "":
-            save_to = Path(os.path.expanduser("~/instacrawl"))
+
+[bold blue]NOTE:[/bold blue] This will be saved in an [italic bold]~/.instacrawlrc[/italic bold] file.
+If you would like to change this, you can edit or simply delete that file.
+It will be recreated if you start a new crawl.
+                """
+            )
+            save_to = Prompt.ask("Path to save data", console=self.console)
+            if save_to in empty_entry:
+                save_to = Path(os.path.expanduser("~/instacrawl"))
+            else:
+                save_to = Path(os.path.expanduser(save_to))
+            with open(os.path.expanduser("~/.instacrawlrc"), "a") as f:
+                f.writelines(f"INSTACRAWL_SAVE_TO={str(save_to)}\n")
+
+        if ("INSTACRAWL_USERNAME" in self.config.keys() and
+                self.config["INSTACRAWL_USERNAME"] not in empty_entry and
+                self.config["INSTACRAWL_USERNAME"] is not None):
+            username = str(
+                        self.config["INSTACRAWL_USERNAME"]
+                    )
         else:
-            save_to = Path(os.path.expanduser(save_to))
-        self.print(
-            "What is your Instagram username?",
-            """
+            self.print(
+                "What is your Instagram username?",
+                """
 This is used to log into your account as Instagram requires you to be
 logged in to view more than 9 posts. This is not stored anywhere.
 
@@ -137,45 +178,76 @@ if you've logged in recently on the same network.
 [bold]
 IT IS RECOMMENDED THAT THIS USERNAME IS DIFFERENT THAN THE ONE YOU ARE CRAWLING
 [/bold]
-            """
-        )
-        username = Prompt.ask(
-            "Username",
-            console=self.console
-        )
-        self.print(
-            "What is your Instagram password?",
-            """
+
+[bold blue]NOTE:[/bold blue] This will be saved in an [italic bold]~/.instacrawlrc[/italic bold] file.
+If you would like to change this, you can edit or simply delete that file.
+It will be recreated if you start a new crawl.
+                """
+            )
+            username = Prompt.ask(
+                "Username",
+                console=self.console
+            )
+            with open(os.path.expanduser("~/.instacrawlrc"), "a") as f:
+                f.writelines(f"INSTACRAWL_USERNAME={str(username)}\n")
+
+        if ("INSTACRAWL_PASSWORD" in self.config.keys() and
+                self.config["INSTACRAWL_PASSWORD"] not in empty_entry and
+                self.config["INSTACRAWL_PASSWORD"] is not None):
+            password = str(
+                        self.config["INSTACRAWL_PASSWORD"]
+                    )
+        else:
+            self.print(
+                "What is your Instagram password?",
+                """
 This is used to log into your account as Instagram requires you to be
 logged in to view more than 9 posts. This is not stored anywhere.
 
 [bold green]NOTE:[/bold green] If you have two-factor authentication enabled,
 you will need to disable it for this to work. Sometimes this is not the case
 if you've logged in recently on the same network.
-            """
-        )
-        password = Prompt.ask(
-            "Password",
-            password=True,
-            console=self.console
-        )
+
+[bold blue]NOTE:[/bold blue] This will be saved in an [italic bold]~/.instacrawlrc[/italic bold] file.
+If you would like to change this, you can edit or simply delete that file.
+It will be recreated if you start a new crawl.
+                """
+            )
+            password = Prompt.ask(
+                "Password",
+                password=True,
+                console=self.console
+            )
+            with open(os.path.expanduser("~/.instacrawlrc"), "a") as f:
+                f.writelines(f"INSTACRAWL_PASSWORD={str(password)}\n")
         return url, save_to, username, password
 
     def get_old_data(self) -> PathLike:
         """Get the default data from the user."""
-        self.print(
-            "Where is the data saved?",
-            """
+        if ("INSTACRAWL_SAVE_TO" in self.config.keys() and
+                self.config["INSTACRAWL_SAVE_TO"] not in empty_entry and
+                self.config["INSTACRAWL_SAVE_TO"] is not None):
+            save_to = Path(
+                os.path.expanduser(
+                    str(
+                        self.config["INSTACRAWL_SAVE_TO"]
+                    )
+                )
+            )
+        else:
+            self.print(
+                "Where is the data saved?",
+                """
 This should be the path to the folder that contains the data
 from the previous steps. (e.g. ~/instacrawl for the default,
 with the data saved in ~/instacrawl/step_one.pkl, etc.)
-            """
-        )
-        save_to = Prompt.ask("Path to data", console=self.console)
-        if save_to == "\n" or save_to == "":
-            save_to = Path(os.path.expanduser("~/instacrawl"))
-        else:
-            save_to = Path(os.path.expanduser(save_to))
+                """
+            )
+            save_to = Prompt.ask("Path to data", console=self.console)
+            if save_to == "\n" or save_to == "":
+                save_to = Path(os.path.expanduser("~/instacrawl"))
+            else:
+                save_to = Path(os.path.expanduser(save_to))
         return save_to
 
     def step1(self, data: InstagramData | None = None):
@@ -225,7 +297,7 @@ Please make sure your computer is plugged in and set to not
             )
             self.console.clear()
             date = self.get_date()
-            if date is None:
+            if date is None or date in ["", "\n", "\r", " "]:
                 data.run()
             else:
                 assert isinstance(date, datetime)
@@ -305,8 +377,7 @@ Would you like to continue on to [bold green]Step 4[/bold green]?
             data.load_step_two()
             data.load_step_three()
         df = data.generate()
-        offset = align_df(df)
-        df = data.shift(offset)
+        align_df(df)
         self.print(
             """
 [bold]Where would you like to save the data sheet?[/bold]

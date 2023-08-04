@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from os import PathLike
 from rich.progress import Progress, TaskID
-from typing import Any, Dict, List, Literal, Iterator, Tuple
+from typing import Any, Dict, List, Literal, Iterator, Tuple, TypedDict
 from collections.abc import MutableMapping
 import numpy as np
 import os
@@ -11,6 +11,7 @@ from PIL import Image
 from decord import VideoReader, cpu
 from pathlib import Path
 import face_recognition
+from datetime import datetime
 
 
 @dataclass
@@ -29,6 +30,25 @@ class DownloadRequest:
     post: List[Post]
 
 
+class PostInfo(TypedDict, total=False):
+    href: str
+    alt: str
+    src: str
+    article: str
+    content: str
+    date: str
+    time: str
+    request: str
+    item: Any
+    likes: int
+    comments: int
+    post: str
+    paths: List[PathLike | str]
+    type_: Literal["video", "image", ""]
+    download_request: DownloadRequest
+    shortcode: str
+
+
 @dataclass
 class InstaStepOne:
     """Step one of the Instagram scraper."""
@@ -39,29 +59,20 @@ class InstaStepOne:
     cookies: Dict[str, str]
     path: PathLike
     hrefs: List[str]
-    alts: List[str]
-    srcs: List[str]
     articles: List[str]
-    contents: List[str]
-    dates: List[str]
-    times: List[str]
+    dates: List[datetime]
     requests: List[str]
-    items: List[Any]
-    likes: List[int]
-    comments: List[int]
-    posts: List[str]
+    posts: Dict[int, PostInfo]
 
 
 @dataclass
 class InstaStepTwo:
     """Step two of the Instagram scraper."""
 
-    download_requests: List[DownloadRequest]
     cookies: Dict[str, str]
     path: PathLike
     hrefs: List[str]
-    paths: List[List[PathLike | str]]
-    types: List[Literal["video", "image", ""]]
+    posts: Dict[int, PostInfo]
 
 
 @dataclass
@@ -69,18 +80,9 @@ class InstaStepThree:
     """Step three of the Instagram scraper."""
 
     hrefs: List[str]
-    alts: List[str]
-    srcs: List[str]
     articles: List[str]
-    contents: List[str]
-    dates: List[str]
-    times: List[str]
-    items: List[Any]
-    comments: List[int]
-    likes: List[int]
-    posts: List[str]
-    paths: List[List[PathLike | str]]
-    types: List[Literal["video", "image", ""]]
+    dates: List[datetime]
+    posts: Dict[int, PostInfo]
 
 
 def sample_frame_indices(clip_len, frame_sample_rate, seg_len):
@@ -190,6 +192,7 @@ class ImageData:
 class InstaPost:
     """Class to store post data."""
 
+    index: int
     href: str
     alt: str
     src: str
@@ -208,6 +211,7 @@ class InstaPost:
 
     def __init__(
         self,
+        index: int,
         href: str,
         alt: str,
         src: str,
@@ -222,6 +226,7 @@ class InstaPost:
         path: List[PathLike],
         type_: Literal["video", "image", ""],
     ):
+        self.index = index
         self.href = href
         self.alt = alt
         self.src = src
@@ -272,14 +277,14 @@ class InstaStepFour(MutableMapping):
         self.images: List[ImageData] = []
         self.people: List[PersonImage] = []
         self.faces: List[FaceData] = []
-        for i, post in enumerate(posts):
-            self.posts[i] = post
+        for post in posts:
+            self.posts[post.index] = post
             if progress is not None and task is not None:
                 progress.update(task, advance=1)
             for j, video in enumerate(post.videos):
                 self.videos.append(
                     VideoData(
-                        post=i,
+                        post=post.index,
                         index=j,
                         path=video,
                         video=get_video(video)
@@ -289,7 +294,7 @@ class InstaStepFour(MutableMapping):
                 im, ar = get_image(image)
                 self.images.append(
                     ImageData(
-                        post=i,
+                        post=post.index,
                         index=j,
                         path=image,
                         image=im,

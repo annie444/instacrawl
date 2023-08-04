@@ -3,9 +3,9 @@
 from typing import Optional
 from typing_extensions import Annotated
 import typer
-from __init__ import __app_name__, __version__
-from console import console
-from prompts import InstaCrawl
+from instacrawl.__init__ import __app_name__, __version__
+from instacrawl.console import console
+from instacrawl.prompts import InstaCrawl
 import sys
 
 app = typer.Typer(rich_markup_mode="rich")
@@ -41,8 +41,13 @@ def main(
         InstaCrawl(console)
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Run the application."""
     if bool([arg for arg in sys.argv[1:] if arg in ["-h", "--help"]]):
         app()
     else:
         main()
+
+
+if __name__ == "__main__":
+    run()

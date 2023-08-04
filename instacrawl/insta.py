@@ -16,17 +16,18 @@ from requests.utils import cookiejar_from_dict
 from rich.progress import Progress
 from rich.progress import open as read
 from bs4 import BeautifulSoup, NavigableString
-from steps import \
+from instacrawl.steps import \
     InstaStepOne, \
     InstaStepTwo, \
     InstaStepThree, \
     DownloadRequest, \
     Post, \
     InstaStepFour, \
-    InstaPost
+    InstaPost, \
+    PostInfo
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from console import console
+from instacrawl.console import console
 from rich.prompt import Prompt
 import pandas as pd
 import requests
@@ -105,21 +106,13 @@ class InstagramData:
             self.path: PathLike = Path(os.path.expanduser("~/instacrawl"))
         else:
             self.path: PathLike = Path(os.path.expanduser(save_path))
-        self.hrefs: List[str] = []
-        self.alts: List[str] = []
-        self.srcs: List[str] = []
-        self.articles: List[str] = []
-        self.contents: List[str] = []
-        self.dates: List[str] = []
-        self.times: List[str] = []
+        self.posts: Dict[
+            int, PostInfo
+        ] = {}
         self.requests: List[str] = []
-        self.items: List[Any] = []
-        self.likes: List[int] = []
-        self.comments: List[int] = []
-        self.posts: List[str] = []
-        self.paths: List[List[PathLike | str]] = []
-        self.types: List[Literal["video", "image", ""]] = []
-        self.download_requests: List[DownloadRequest] = []
+        self.articles: List[str] = []
+        self.dates: List[datetime] = []
+        self.hrefs: List[str] = []
 
     def new(
         self,
@@ -252,8 +245,9 @@ class InstagramData:
                 )
             )
 
-    def get_login_data(self):
+    def get_login_data(self) -> int:
         """Get data from login page."""
+        indicies = []
         with console.status("Getting login data..."):
             soup = BeautifulSoup(self.driver.page_source, "html.parser")
             soup_data = soup.find_all(
@@ -261,78 +255,94 @@ class InstagramData:
                 type="application/ld+json"
             )
             if isinstance(soup_data, NavigableString) or not soup_data:
-                return
+                return 0
             else:
                 data = json.loads(str(soup_data[1].contents[0]))
                 if not data:
-                    return
+                    return 0
                 else:
                     for item in data:
-                        self.items.append(item)
+                        index = len(list(self.posts.keys()))
+                        if index not in self.posts.keys():
+                            self.posts[index] = {}
+                        indicies.append(index)
+                        self.posts[index]["item"] = item
                         dt = datetime.fromisoformat(item.get('dateCreated'))
-                        self.dates.append(
+                        self.dates.append(dt)
+                        self.posts[index]["date"] = \
                             f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
-                        )
                         if dt.hour > 12:
                             if dt.hour == 12:
-                                self.times.append(
+                                self.posts[index]["time"] = \
                                     f"{dt.hour:02d}:{dt.minute:02d} PM"
-                                )
                             else:
-                                self.times.append(
+                                self.posts[index]["time"] = \
                                     f"{(dt.hour - 12):02d}:{dt.minute:02d} PM"
-                                )
                         elif dt.hour == 0:
-                            self.times.append(
+                            self.posts[index]["time"] = \
                                 f"{12:02d}:{dt.minute:02d} AM"
-                            )
                         else:
-                            self.times.append(
+                            self.posts[index]["time"] = \
                                 f"{dt.hour:02d}:{dt.minute:02d} AM"
-                            )
+                        self.posts[index]["article"] = \
+                            item.get('articleBody')
                         self.articles.append(item.get('articleBody'))
                         for stat in item.get("interactionStatistic"):
                             if stat.get(
                                 "interactionType"
                             ) == 'http://schema.org/LikeAction':
-                                self.likes.append(
+                                self.posts[index]["likes"] = \
                                     stat.get(
                                         "userInteractionCount"
                                     )
-                                )
                             elif stat.get(
                                 "interactionType"
                             ) == 'https://schema.org/CommentAction':
-                                self.comments.append(
+                                self.posts[index]["comments"] = \
                                     stat.get(
                                         "userInteractionCount"
                                     )
-                                )
-                        self.contents.append(
+                        self.posts[index]["content"] = \
                             item.get(
                                 'mainEntityOfPage'
                             ).get(
                                 '@id'
                             )
-                        )
+                        self.posts[index]["shortcode"] = \
+                            item.get(
+                                'identifier'
+                            ).get(
+                                'value'
+                            )
+        return min(indicies) if len(indicies) > 0 else 0
 
-    def get_posts(self):
+    def get_posts(self, i: int):
         """Get posts from Instagram page."""
         soup = BeautifulSoup(self.driver.page_source, "html.parser")
-        posts = soup.find_all("a", role="link", href=self.post_link)
-        for post in posts:
-            self.posts.append(post)
-            self.hrefs.append(post["href"])
+        for index, saved_post in self.posts.items():
+            if index < i:
+                continue
+            self.code = saved_post["shortcode"]
+            post = soup.find("a", role="link", href=self.post_link)
+            if isinstance(post, NavigableString) or post is None:
+                continue
+            saved_post["post"] = str(post)
+            saved_post["href"] = str(post["href"])
             img = post.find("img")
-            self.srcs.append(img["src"])
+            if img is None or isinstance(img, NavigableString):
+                continue
+            saved_post["src"] = str(img["src"])
             if "alt" in img.attrs.keys():
-                self.alts.append(img["alt"])
+                saved_post["alt"] = str(img["alt"])
             else:
-                self.alts.append("")
-            self.post = post
+                self.posts[index]["alt"] = ""
+            self.post = saved_post
 
     def load_more(self):
         """Load more posts."""
+        assert self.post is not None
+        assert "href" in self.post.keys()
+        assert self.post["href"] is not None
         last_post = self.driver.find_element(
             By.XPATH,
             f"//a[@href='{self.post['href']}']"
@@ -340,8 +350,9 @@ class InstagramData:
         ActionChains(self.driver).scroll_to_element(last_post).perform()
         time.sleep(1)
 
-    def intecept_posts(self):
+    def intercept_posts(self) -> int:
         """Intercept requests to get data."""
+        indicies = []
         for request in self.driver.requests:
             if ('api/v1/feed/user' in request.url
                     and request.response
@@ -358,7 +369,10 @@ class InstagramData:
                 items = data.get("items")
                 for item in items:
                     if not item.get('caption').get("text") in self.articles:
-                        self.items.append(item)
+                        index = len(list(self.posts.keys()))
+                        if index not in self.posts.keys():
+                            self.posts[index] = {}
+                        self.posts[index]["item"] = item
                         dt = datetime.fromtimestamp(
                             item.get(
                                 'caption'
@@ -367,47 +381,43 @@ class InstagramData:
                             ),
                             tz=ZoneInfo("America/Los_Angeles")
                         )
-                        self.dates.append(
+                        self.dates.append(dt)
+                        self.posts[index]["date"] = \
                             f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
-                        )
                         if dt.hour > 12:
                             if dt.hour == 12:
-                                self.times.append(
+                                self.posts[index]["time"] = \
                                     f"{dt.hour:02d}:{dt.minute:02d} PM"
-                                )
                             else:
-                                self.times.append(
+                                self.posts[index]["time"] = \
                                     f"{(dt.hour - 12):02d}:{dt.minute:02d} PM"
-                                )
                         elif dt.hour == 0:
-                            self.times.append(
+                            self.posts[index]["time"] = \
                                 f"{12:02d}:{dt.minute:02d} AM"
-                            )
                         else:
-                            self.times.append(
+                            self.posts[index]["time"] = \
                                 f"{dt.hour:02d}:{dt.minute:02d} AM"
-                            )
+                        self.posts[index]["article"] = \
+                            item.get('caption').get("text")
                         self.articles.append(item.get('caption').get("text"))
-                        self.comments.append(item.get("comment_count"))
-                        self.likes.append(item.get("like_count"))
+                        self.posts[index]["comments"] = \
+                            item.get("comment_count")
+                        self.posts[index]["likes"] = \
+                            item.get("like_count")
+                        code = item.get('code')
+                        self.posts[index]["shortcode"] = code
                         match item.get('media_type'):
                             case 2:
-                                code = item.get('code')
-                                self.contents.append(
+                                self.posts[index]["content"] = \
                                     f"https://www.instagram.com/reel/{code}"
-                                )
                             case 8:
-                                code = item.get('code')
-                                self.contents.append(
+                                self.posts[index]["content"] = \
                                     f"https://www.instagram.com/p/{code}"
-                                )
                             case 1:
-                                code = item.get('code')
-                                self.contents.append(
+                                self.posts[index]["content"] = \
                                     f"https://www.instagram.com/p/{code}"
-                                )
                             case _:
-                                console.print(json.dumps(item, indent=2))
+                                self.posts[index]["content"] = ""
                         if (self.progress is not None
                                 and self.task is not None
                                 and isinstance(self.progress, Progress)):
@@ -418,7 +428,12 @@ class InstagramData:
                                     and isinstance(self.date, datetime)
                                     and isinstance(self.days, int)):
                                 delta = datetime.fromisoformat(
-                                    self.dates[-1]
+                                    [
+                                        post["date"]
+                                        for post in
+                                        self.posts.values()
+                                        if "date" in post.keys()
+                                    ][-1]
                                 ) - self.date
                                 self.progress.update(
                                     self.task,
@@ -429,6 +444,7 @@ class InstagramData:
                                     self.task,
                                     advance=1
                                 )
+        return min(indicies) if len(indicies) > 0 else 0
 
     def get_contents(self):
         """Get contents from Instagram page."""
@@ -444,7 +460,11 @@ class InstagramData:
             cookies: Cookies = Cookies(cookies)
             with ThreadPoolExecutor(max_workers=5) as executor:
                 futures = []
-                for i, href in enumerate(self.hrefs):
+                for i, href in [
+                    (key, post["href"])
+                    for key, post in
+                    self.posts.items()
+                ]:
                     future = executor.submit(
                         get_post_data,
                         i,
@@ -464,24 +484,34 @@ class InstagramData:
     def once_complete(self, f):
         """Update on completion."""
         try:
-            p, t, dr = f.result()
-            self.paths.append(p)
-            self.types.append(t)
+            i, p, t, dr = f.result()
+            self.posts[i]["paths"] = p
+            self.posts[i]["type_"] = t
             if dr is not None:
-                self.download_requests.append(dr)
+                self.posts[i]["download_request"] = dr
             self.progress.update(self.task, advance=1)
         except Exception:
             console.print(f.exception())
         finally:
             return None
 
+    @property
+    def download_requests(self) -> list[DownloadRequest]:
+        """Get download requests."""
+        return [
+            post["download_request"]
+            for post in self.posts.values()
+            if "download_request" in post.keys()
+        ]
+
     def download(self):
         """Create new download thread."""
         with Progress() as progress:
+            drs = self.download_requests
             self.progress = progress
             self.task = progress.add_task(
                 "Downloading posts...",
-                total=len(self.download_requests)
+                total=len(drs)
             )
             if self.cookies is None:
                 self.cookies: Cookies = self.get_cookies()
@@ -489,7 +519,7 @@ class InstagramData:
             cookies: Cookies = Cookies(cookies)
             with ThreadPoolExecutor(max_workers=5) as executor:
                 futures = []
-                for download in self.download_requests:
+                for download in drs:
                     for post in download.post:
                         future = executor.submit(
                             download_post_content,
@@ -518,15 +548,15 @@ class InstagramData:
     def more(self):
         """Load more posts."""
         self.load_more()
-        self.intecept_posts()
-        self.get_posts()
+        start = self.intercept_posts()
+        self.get_posts(start)
 
     def start(self):
         """Start the scraper."""
         self.open()
         self.login()
-        self.get_login_data()
-        self.get_posts()
+        start = self.get_login_data()
+        self.get_posts(start)
 
     def run(self):
         """Run the scraper."""
@@ -556,7 +586,7 @@ class InstagramData:
                 "Loading posts...",
                 total=self.days
             )
-            while datetime.fromisoformat(self.dates[-1]) >= date:
+            while self.dates[-1] >= date:
                 self.more()
             self.progress.update(self.task, completed=self.days)
             del self.progress
@@ -573,102 +603,14 @@ class InstagramData:
         return re.compile(
             r"(^\/p\/)|(^\/reel\/)"
         ).search(href) is not None and \
-            href not in self.hrefs
-
-    def _lengths(self) -> Tuple[
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int,
-        int
-    ]:
-        lhref, lalt, lsrc, lart, lcont, ldate, ltime, \
-            litem, lcomm, llike, lpost, lpath, ltype = \
-            len(self.hrefs), len(self.alts), len(self.srcs), \
-            len(self.articles), len(self.contents), \
-            len(self.dates), len(self.times), len(self.items), \
-            len(self.comments), len(self.likes), \
-            len(self.posts), len(self.paths), len(self.types)
-        max_len = max(
-            lhref,
-            lalt,
-            lsrc,
-            lart,
-            lcont,
-            ldate,
-            ltime,
-            litem,
-            lcomm,
-            llike,
-            lpost,
-            lpath,
-            ltype
-        )
-        return (
-            lhref,
-            lalt,
-            lsrc,
-            lart,
-            lcont,
-            ldate,
-            ltime,
-            litem,
-            lcomm,
-            llike,
-            lpost,
-            lpath,
-            ltype,
-            max_len
-        )
-
-    def _extend(
-        self,
-        max: int,
-        l: int,
-        extended: List[Any],
-        type_: str = ""
-    ) -> List[Any]:
-        if not max == l:
-            if type_ == "str":
-                extended.extend([""] * (max - l))
-            elif type_ == "int":
-                extended.extend([0] * (max - l))
-            elif type_ == "obj":
-                extended.extend([{}] * (max - l))
-            else:
-                extended.extend([""] * (max - l))
-        return extended
-
-    def _even_out(self):
-        lhref, lalt, lsrc, lart, lcont, ldate, ltime, \
-            litem, lcomm, llike, lpost, lpath, ltype, max_len = self._lengths()
-
-        self.hrefs = self._extend(max_len, lhref, self.hrefs, "str")
-        self.alts = self._extend(max_len, lalt, self.alts, "str")
-        self.srcs = self._extend(max_len, lsrc, self.srcs, "str")
-        self.articles = self._extend(max_len, lart, self.articles, "str")
-        self.contents = self._extend(max_len, lcont, self.contents, "str")
-        self.dates = self._extend(max_len, ldate, self.dates, "str")
-        self.times = self._extend(max_len, ltime, self.times, "str")
-        self.items = self._extend(max_len, litem, self.items, "str")
-        self.comments = self._extend(max_len, lcomm, self.comments, "int")
-        self.likes = self._extend(max_len, llike, self.likes, "int")
-        self.posts = self._extend(max_len, lpost, self.posts, "obj")
-        self.paths = self._extend(max_len, lpath, self.paths, "str")
-        self.types = self._extend(max_len, ltype, self.types, "str")
+            href not in self.hrefs and \
+            re.compile(
+                f"({self.code})"
+        ).search(href) is not None
 
     def generate(self, multi: bool = False) -> pd.DataFrame:
         """Generate a pandas dataframe from the scraped data."""
-        self._even_out()
+        index: List[int] = []
         columns: List[str] | pd.MultiIndex = [
             "href",
             "alt",
@@ -681,33 +623,25 @@ class InstagramData:
             "comments",
             "likes",
             "post",
-            "path",
-            "type"
+            "paths",
+            "type_"
         ]
+        for i in self.posts.keys():
+            index.append(i)
+        data: List[List[Any]] = []
+        for i in index:
+            row: List[Any] = []
+            for col in columns:
+                if self.posts[i][col] is None:
+                    row.append(None)
+                else:
+                    row.append(self.posts[i][col])
+            data.append(row)
         if multi:
             columns = pd.MultiIndex.from_product([["scraped"], columns])
-        return pd.DataFrame({
-            "href": self.hrefs,
-            "alt": self.alts,
-            "src": self.srcs,
-            "article": self.articles,
-            "content": self.contents,
-            "date": self.dates,
-            "time": self.times,
-            "item": self.items,
-            "comments": self.comments,
-            "likes": self.likes,
-            "post": self.posts,
-            "path": self.paths,
-            "type": self.types
-        }, columns=columns)
+        return pd.DataFrame(data, index=index, columns=columns)
 
-    def shift(self, shift: int) -> pd.DataFrame:
-        self.paths.insert(0, [""] * shift)
-        df = self.generate()
-        return df
-
-    def get_cookies(self):
+    def get_cookies(self) -> Cookies:
         """Get cookies from Selenium and add to requests."""
         cookies = {}
         selenium_cookies = self.driver.get_cookies()
@@ -719,23 +653,16 @@ class InstagramData:
     def step_one(self) -> InstaStepOne:
         self.cookies: Cookies = self.get_cookies()
         return InstaStepOne(
-            self.profile_page,
-            self.username,
-            self.password,
-            self.cookies,
-            self.path,
-            self.hrefs,
-            self.alts,
-            self.srcs,
-            self.articles,
-            self.contents,
-            self.dates,
-            self.times,
-            self.requests,
-            self.items,
-            self.likes,
-            self.comments,
-            self.posts
+            profile_page=self.profile_page,
+            username=self.username,
+            password=self.password,
+            cookies=self.cookies,
+            path=self.path,
+            hrefs=self.hrefs,
+            articles=self.articles,
+            dates=self.dates,
+            requests=self.requests,
+            posts=self.posts
         )
 
     @property
@@ -743,61 +670,44 @@ class InstagramData:
         if self.cookies is None:
             self.cookies: Cookies = self.get_cookies()
         return InstaStepTwo(
-            self.download_requests,
-            self.cookies,
-            self.path,
-            self.hrefs,
-            self.paths,
-            self.types
+            cookies=self.cookies,
+            path=self.path,
+            hrefs=self.hrefs,
+            posts=self.posts,
         )
 
     @property
     def step_three(self) -> InstaStepThree:
         return InstaStepThree(
-            self.hrefs,
-            self.alts,
-            self.srcs,
-            self.articles,
-            self.contents,
-            self.dates,
-            self.times,
-            self.items,
-            self.comments,
-            self.likes,
-            self.posts,
-            self.paths,
-            self.types,
+            hrefs=self.hrefs,
+            articles=self.articles,
+            dates=self.dates,
+            posts=self.posts,
         )
 
     @property
     def step_four(self) -> InstaStepFour:
-        self._even_out()
         posts = []
         with Progress(console=console) as progress:
             total = (len(self.posts) * 2) + 1
             load = progress.add_task("Converting data...", total=total)
-            for href, alt, src, article, content, date, \
-                    time_, item, comment, like, path, type_, post in zip(
-                    self.hrefs, self.alts, self.srcs, self.articles,
-                    self.contents, self.dates, self.times, self.items,
-                    self.comments, self.likes, self.paths, self.types,
-                    self.posts
-                    ):
+            for i, post in self.posts.items():
                 posts.append(
                     InstaPost(
-                        href=href,
-                        alt=alt,
-                        src=src,
-                        article=article,
-                        content=content,
-                        post=post,
-                        date=date,
-                        time=time_,
-                        item=item,
-                        comments=comment,
-                        likes=like,
-                        path=path,
-                        type_=type_
+                        index=i,
+                        href=post["href"],
+                        alt=post["alt"],
+                        src=post["src"],
+                        article=post["article"],
+                        content=post["content"],
+                        post=post["post"],
+                        date=post["date"],
+                        time=post["time"],
+                        item=post["item"],
+                        comments=post["comments"],
+                        likes=post["likes"],
+                        path=[Path(path) for path in post["paths"]],
+                        type_=post["type_"]
                     )
                 )
                 progress.update(load, advance=1)
@@ -842,16 +752,9 @@ class InstagramData:
         self.password = obj.password
         self.path = obj.path
         self.hrefs = obj.hrefs
-        self.alts = obj.alts
-        self.srcs = obj.srcs
         self.articles = obj.articles
-        self.contents = obj.contents
         self.dates = obj.dates
-        self.times = obj.times
         self.requests = obj.requests
-        self.items = obj.items
-        self.likes = obj.likes
-        self.comments = obj.comments
         self.posts = obj.posts
         self.cookies: Cookies = Cookies(obj.cookies)
 
@@ -878,11 +781,10 @@ class InstagramData:
             description="Reading step two..."
         ) as f:
             obj = pickle.load(f)
-        self.download_requests = obj.download_requests
         self.cookies = obj.cookies
         self.path = obj.path
         self.hrefs = obj.hrefs
-        self.paths = obj.paths
+        self.posts = obj.posts
 
     def save_step_three(self):
         """Save the third step."""
@@ -912,18 +814,9 @@ class InstagramData:
         ) as f:
             obj = pickle.load(f)
         self.hrefs = obj.hrefs
-        self.alts = obj.alts
-        self.srcs = obj.srcs
         self.articles = obj.articles
-        self.contents = obj.contents
         self.dates = obj.dates
-        self.times = obj.times
-        self.items = obj.items
-        self.comments = obj.comments
-        self.likes = obj.likes
         self.posts = obj.posts
-        self.paths = obj.paths
-        self.types = obj.types
 
     def save_step_four(self):
         """Save the fourth step."""
@@ -952,57 +845,45 @@ class InstagramData:
             description="Reading step four..."
         ) as f:
             obj = pickle.load(f)
-        hrefs = []
-        alts = []
-        srcs = []
-        articles = []
-        contents = []
-        dates = []
-        times = []
-        items = []
-        comments = []
-        likes = []
-        posts = []
-        paths = []
-        types = []
         with Progress(console=console) as progress:
             total = len(obj.posts)
             serialize = progress.add_task(
                 "Deserializing step four...",
                 total=total
             )
+            hrefs = []
+            articles = []
+            dates = []
             for post in obj.posts.values():
+                self.posts[post.index] = {
+                    "href": post.href,
+                    "alt": post.alt,
+                    "src": post.src,
+                    "article": post.article,
+                    "content": post.content,
+                    "date": post.date,
+                    "time": post.time,
+                    "item": post.item,
+                    "comments": post.comments,
+                    "likes": post.likes,
+                    "post": post.post,
+                    "paths": post.path,
+                    "type_": post.type_,
+                }
                 hrefs.append(post.href)
-                alts.append(post.alt)
-                srcs.append(post.src)
                 articles.append(post.article)
-                contents.append(post.content)
-                dates.append(post.date)
-                times.append(post.time)
-                items.append(post.item)
-                comments.append(post.comments)
-                likes.append(post.likes)
-                posts.append(post.post)
-                paths.append(post.path)
-                types.append(post.type_)
+                dates.append(datetime.strptime(
+                    f"{post.date} {post.time}",
+                    "%Y-%m-%d %I:%M %p"
+                ))
                 progress.update(serialize, advance=1)
             self.profile_page = obj.url
             self.path = obj.path
             self.username = obj.username
             self.password = obj.password
             self.hrefs = hrefs
-            self.alts = alts
-            self.srcs = srcs
             self.articles = articles
-            self.contents = contents
             self.dates = dates
-            self.times = times
-            self.items = items
-            self.comments = comments
-            self.likes = likes
-            self.posts = posts
-            self.paths = paths
-            self.types = types
             progress.update(serialize, completed=total)
 
 
@@ -1020,6 +901,9 @@ def download_post_content(
     )
     if r.status_code >= 400:
         cookies.refresh(link)
+    dir = file.rsplit("/", 1)[0]
+    if not os.path.exists(dir):
+        os.makedirs(dir)
     with open(file, 'wb') as f:
         for chunk in r.iter_content(1024):
             if chunk:
@@ -1027,6 +911,7 @@ def download_post_content(
 
 
 PostData = Tuple[
+    int,
     List[PathLike | str],
     Literal["image", "video", ""],
     DownloadRequest | None
@@ -1194,7 +1079,7 @@ def get_video_from_page(
             file=file
         )]
     )
-    return paths, types, download_requests
+    return num, paths, types, download_requests
 
 
 def get_carousel_from_page(
@@ -1234,7 +1119,7 @@ def get_carousel_from_page(
             file=file
         ))
     types = "image"
-    return paths, types, download_requests
+    return num, paths, types, download_requests
 
 
 def diagnose_wait(
@@ -1377,7 +1262,7 @@ def add_paths(
                 cookies,
                 wait
             )
-    return paths, rt, None
+    return num, paths, rt, None
 
 
 def get_video(
@@ -1415,7 +1300,7 @@ def get_video(
             file=thumbfile
         )]
     )
-    return paths, types, download_requests
+    return num, paths, types, download_requests
 
 
 def get_photo(
@@ -1440,7 +1325,7 @@ def get_photo(
             file=file
         )]
     )
-    return paths, types, download_requests
+    return num, paths, types, download_requests
 
 
 def get_carousel(
@@ -1470,4 +1355,4 @@ def get_carousel(
         ))
         paths.append(f"{path}/{file}")
     types = "image"
-    return paths, types, down_req
+    return num, paths, types, down_req
