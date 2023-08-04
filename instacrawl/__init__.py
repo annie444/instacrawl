@@ -2,6 +2,7 @@
 # instacrawl/__init__.py
 
 __app_name__ = "instacrawl"
+<<<<<<< Updated upstream
 __version__ = "0.1.0"
 
 (
@@ -21,3 +22,8 @@ ERRORS = {
     DB_WRITE_ERROR: "database write error",
     ID_ERROR: "to-do id error",
 }
+||||||| Stash base
+__version__ = "0.1.3"
+=======
+__version__ = "0.1.4"
+>>>>>>> Stashed changes
